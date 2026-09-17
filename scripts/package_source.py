@@ -13,6 +13,7 @@ def source_files():
         paths.extend(sorted((BASE / folder).glob('*.py')))
     paths.extend(sorted((BASE / 'docs').glob('*.md')))
     paths.extend(BASE / name for name in ('docs/performance-data.json', 'docs/probability-glossary.json'))
+    paths.append(BASE / 'tests/ci_manifest.json')
     paths.extend(sorted((BASE / '.github/workflows').glob('*.yml')))
     paths.extend(sorted((BASE / '.github/ISSUE_TEMPLATE').glob('*.md')))
     paths.extend(sorted((BASE / '.github').glob('*.md')))

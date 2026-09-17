@@ -1,0 +1,28 @@
+{
+  "unit": [
+    "test_translation_flow.py",
+    "test_transcript_history.py",
+    "test_distribution.py",
+    "test_audio_archive.py",
+    "test_audio_enhancement.py",
+    "test_capture_diagnostics.py"
+  ],
+  "gui": [
+    "test_transcript_persistence.py",
+    "test_render_responsiveness.py",
+    "test_capture_worker_contract.py"
+  ],
+  "frontend": [
+    "test_gtcrn_processing.py"
+  ],
+  "manual": {
+    "test_quick_stop.py": "Requires native ASR runtime and model",
+    "test_gtcrn_menu_live.py": "Audible Windows playback and capture; opt in locally",
+    "test_shared_asr_streams.py": "Requires native ASR model and DLL",
+    "test_caption_backlog.py": "Requires both real translation models",
+    "test_repetition.py": "Requires real NLLB model",
+    "test_system_audio.py": "Audible Windows hardware capture; opt in locally",
+    "test_stream_translation.py": "Requires real NLLB model and Tk",
+    "test_unknown_translation.py": "Requires real NLLB worker and model"
+  }
+}

@@ -110,3 +110,12 @@ translation\.venv\Scripts\python.exe tests\test_system_audio.py
 欢迎 [提交 Issue](https://github.com/WYI1223/local-caption/issues) 或 fork 后发起 PR，macOS 优化可单独提交。流程见 [贡献说明](CONTRIBUTING.md)。
 
 后续：在另一台 Windows 机器验证安装；长时间回放与设备切换；overlapping 对照实验；再考虑免 Python 安装器、签名、升级与多系统支持。
+
+
+### 采集积压诊断与 CI 范围
+
+Windows 采集会话会自动生成同名 `.capture.jsonl`（每秒一条、本地保存，不包含声音或字幕内容），记录实际队列秒数、阶段耗时、送模与结果进度、CPU 和内存。当前文件约 20 MiB 后轮换，保留一份 `.capture.previous.jsonl`；每个会话最多约 40 MiB。停止后保存最终状态。无需开启录音即可记录；若退出发生在模型载入阶段也保留已有诊断。直接启动 worker 时默认写入 diagnostics。已运行的旧 worker 不会热更新，下一次启动采集才加载新版。
+
+界面“采集队列”表示仍等待处理的输入音频；旧 `backlog_seconds` 仍保留在指标中以兼容历史分析，但它是采集进度减结果游标，不能当作真实队列或字幕延迟。遇到“超过 12 秒”时保留对应 `.capture.jsonl`、`.metrics.jsonl` 和错误信息；公开分享前检查个人信息，无需上传整堂课音频。没有放大队列上限，也没有静默丢弃音频来掩盖积压。
+
+CI 使用 `tests/ci_manifest.json` 列出所有测试，新测试未分类会失败。`python scripts/run_ci.py unit` 覆盖逻辑、存档和队列诊断；`gui` 在 Windows 验证真实 Tk 保存／响应及受控 worker 流程；`frontend` 需要可选依赖和模型，运行真实 GTCRN 分块及收尾验证。Windows/Linux 逻辑检查、Windows GUI 和真实前端必须全部通过汇总检查 `Required CI`。模型识别质量、真实声卡／麦克风、整堂课连续运行及 macOS 硬件路径仍需手工验证，不能由 CI 绿灯推断。

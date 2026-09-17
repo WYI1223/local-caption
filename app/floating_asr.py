@@ -296,7 +296,7 @@ def main(test_driver=None):
                 hint += f' · {deferred} 段待补译'
             if self.audio_metrics:
                 pending = self.queue_metrics()
-                hint += (f"\n音频待识别 {self.audio_metrics.get('backlog_seconds', 0):.1f}s"
+                hint += (f"\n采集队列 {self.audio_metrics.get('queue_seconds', self.audio_metrics.get('backlog_seconds', 0)):.1f}s"
                          f" · 待译 {pending['pending_words']} 词 / 最早 {pending['oldest_pending_seconds']:.1f}s"
                          + (' · 采集已停止' if not self.proc or self.audio_metrics.get('stopped') else
                             ' · 无声' if self.audio_metrics.get('level', 0) < 0.001 else ' · 有声音'))
@@ -400,7 +400,8 @@ def main(test_driver=None):
             options = process_options(console=True)
             if mode == 'system' or self.active_enhancement or archive_audio:
                 command = [str(PYTHON), str(BASE / 'app/loopback_worker.py'), '--source',
-                           'system' if mode == 'system' else 'microphone']
+                           'system' if mode == 'system' else 'microphone',
+                           '--diagnostics', str(self.session_file.with_suffix('.capture.jsonl'))]
                 if self.active_enhancement:
                     command[0]=str(FILTER_PYTHON)
                     command += ['--gtcrn-mix',self.active_filter.removeprefix('gtcrn')]
@@ -458,6 +459,9 @@ def main(test_driver=None):
             for event in batch:
                 if 'audio_metrics' in event:
                     self.audio_metrics = event['audio_metrics']
+                    if 'worker_monotonic' in event:
+                        self.audio_metrics['gui_delivery_seconds'] = max(0, time.monotonic()-event['worker_monotonic'])
+                    self.audio_metrics['gui_pending_events'] = self.events.qsize()
                     self.record_metrics('audio')
                     self.refresh_hints()
                 elif 'audio_recording' in event:

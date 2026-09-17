@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import argparse
+from capture_diagnostics import AudioQueue, CaptureDiagnostics, source_fingerprint
 
 BASE = Path(__file__).resolve().parents[1]
 
@@ -17,6 +18,7 @@ BASE = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', choices=['system', 'microphone'], default='system')
+    parser.add_argument('--diagnostics', type=Path, help='Local capture heartbeat JSONL (no audio or transcript)')
     parser.add_argument('--enhance', action='store_true')
     parser.add_argument('--gtcrn-mix', type=int, choices=[25,50])
     parser.add_argument('--record-audio', type=Path, help='Save unenhanced device audio as PCM16 WAV')
@@ -28,10 +30,14 @@ def main():
     if args.compare and not args.duration:
         args.duration = 30
     sys.stdout.reconfigure(encoding='utf-8')
+    diagnostic_path = args.diagnostics or BASE / 'diagnostics' / f'capture-{os.getpid()}-{time.time_ns()}.jsonl'
+    probe = CaptureDiagnostics(diagnostic_path, dict(source=args.source, mix=args.gtcrn_mix, build=source_fingerprint()))
     lock = threading.Lock()
     def emit(event):
-        with lock:
-            print(json.dumps(event, ensure_ascii=True), flush=True)
+        with probe.stage('stdout'):
+            with lock:
+                event['worker_monotonic'] = time.monotonic()
+                print(json.dumps(event, ensure_ascii=True), flush=True)
     stop = threading.Event()
     ready = threading.Event()
     def listen():
@@ -48,6 +54,8 @@ def main():
         stop.set()
         if not ready.is_set():
             emit({'exit': 0, 'cancelled': True})
+            probe.update(exit_code=0, cancelled_during_load=True)
+            probe.close()
             os._exit(0)  # Cancels native model loading before capture starts.
     threading.Thread(target=listen, daemon=True).start()
     # Native DLL diagnostics must not fill the GUI's stderr pipe or enter subtitles.
@@ -75,7 +83,8 @@ def main():
             if available is not None and available < 5:
                 raise RuntimeError(f'A/B 对比需要额外识别工作区；当前可提交内存仅 {available:.1f} GiB（保守要求5 GiB）。请先停止其他字幕采集再试。')
         else:
-            recognizer = StreamRecognizer()
+            with probe.stage('model_load'):
+                recognizer = StreamRecognizer()
         from audio_enhancement import ClassroomEnhancer
         enhancer = ClassroomEnhancer(rate) if args.enhance or args.compare else None
         output_rate = rate
@@ -83,21 +92,29 @@ def main():
             from gtcrn_mix import GTCRNMix
             enhancer = GTCRNMix(rate,args.gtcrn_mix/100)
             output_rate = enhancer.output_rate
-        blocks = queue.Queue(maxsize=120)  # 12 seconds, then stop explicitly; never silently drop.
+        blocks = AudioQueue(rate, maxsize=120)  # 12 seconds, then stop explicitly; never silently drop.
+        probe.queue = blocks
+        probe.update(rate=rate, channels=channels)
         fault = []
         captured = 0
         peak = 0.0
         processed = 0.0
+        dequeued_frames = 0
+        submitted_seconds = 0.0
+        callback_count = 0
         raw_processed = 0.0
         enhancement_seconds = 0.0
         comparison_audio = []
         phase = 'capture'
         started = time.monotonic()
         def callback(data, frame_count, timing, status):
-            nonlocal captured, peak
+            nonlocal captured, peak, callback_count
+            callback_count += 1
+            probe.update(callback_count=callback_count, last_callback_monotonic=time.monotonic(), callback_frames=frame_count, callback_status=status)
             if stop.is_set():
                 return (None, pa.paComplete)
             if status:
+                probe.update(fault='device_status')
                 fault.append(f'系统音频采集发生溢出或设备错误（{status}），请停止其他高负载任务后重试。')
                 stop.set()
                 return (None, pa.paComplete)
@@ -108,6 +125,7 @@ def main():
                 try:
                     archive.submit(recorded_data)
                 except Exception as exc:
+                    probe.update(fault='audio_archive_submit')
                     fault.append(str(exc))
                     stop.set()
                     return (None, pa.paComplete)
@@ -118,7 +136,9 @@ def main():
             try:
                 blocks.put_nowait(samples)
                 captured += len(samples)
+                probe.update(captured_seconds=captured/rate)
             except queue.Full:
+                probe.update(fault='capture_queue_full', rejected_frames=len(samples))
                 fault.append('音频待识别超过 12 秒，已停止采集以避免继续积压；末尾可能不完整。')
                 stop.set()
                 return (None, pa.paComplete)
@@ -147,6 +167,7 @@ def main():
             nonlocal processed, previous
             for result in results:
                 processed = max(processed, result['processed'])
+                probe.update(result_processed_seconds=processed, last_result_monotonic=time.monotonic())
                 text = result['text']
                 if text != previous or result['final']:
                     elapsed = max(0.0, time.monotonic() - started - max(0, captured / rate - processed))
@@ -156,9 +177,14 @@ def main():
             nonlocal last_metrics
             now = time.monotonic()
             if force or now - last_metrics >= 0.5:
+                queue_state = blocks.snapshot()
+                probe.update(dequeued_seconds=dequeued_frames/rate, submitted_seconds=submitted_seconds, result_processed_seconds=processed, phase=phase)
                 emit({'audio_metrics': dict(elapsed=now - started, captured_seconds=captured / rate,
                     processed_seconds=processed, backlog_seconds=max(0, captured / rate - min(processed, raw_processed) if args.compare else captured / rate - processed),
-                    queued_blocks=blocks.qsize(), level=peak, stopped=stop.is_set(),
+                    queued_blocks=queue_state['queued_blocks'], queue_seconds=queue_state['queue_seconds'],
+                    queue_high_seconds=queue_state['queue_high_seconds'], overflow_count=queue_state['overflow_count'],
+                    submitted_seconds=submitted_seconds, result_lag_seconds=max(0, submitted_seconds-processed),
+                    diagnostic_error=probe.write_error, level=peak, stopped=stop.is_set(),
                     enhancement=enhancer.metrics() if enhancer else None, enhancement_seconds=enhancement_seconds,
                     phase=phase)})
                 last_metrics = now
@@ -170,19 +196,32 @@ def main():
                     raise RuntimeError('系统声音设备已停止或断开，请重新选择默认播放设备后重试。')
                 metrics()
                 continue
+            dequeued_frames += len(samples)
+            probe.update(dequeued_seconds=dequeued_frames/rate, in_flight_seconds=len(samples)/rate)
             before = time.perf_counter()
-            enhanced = enhancer.process(samples) if enhancer else samples
+            with probe.stage('enhancement'):
+                enhanced = enhancer.process(samples) if enhancer else samples
             enhancement_seconds += time.perf_counter() - before
             if args.compare:
                 comparison_audio.append((samples, enhanced))
             else:
-                if len(enhanced):recognizer.push(enhanced, output_rate)
-                publish(recognizer.results())
+                if len(enhanced):
+                    with probe.stage('asr_push'):
+                        recognizer.push(enhanced, output_rate)
+                    submitted_seconds += len(enhanced)/output_rate
+                    probe.update(submitted_seconds=submitted_seconds)
+                with probe.stage('asr_results_and_publish'):
+                    publish(recognizer.results())
+            probe.update(in_flight_seconds=0)
             metrics()
         capture.stop_stream()
         if args.gtcrn_mix:
-            tail=enhancer.finish()
-            if len(tail):recognizer.push(tail,output_rate)
+            with probe.stage('enhancement_flush'):
+                tail=enhancer.finish()
+            if len(tail):
+                with probe.stage('asr_push'):
+                    recognizer.push(tail,output_rate)
+                submitted_seconds += len(tail)/output_rate
             publish(recognizer.results())
         if args.compare:
             phase = 'raw'
@@ -204,13 +243,15 @@ def main():
                 recognizer.push(enhanced, rate)
                 publish(recognizer.results())
                 metrics()
-        publish(recognizer.finish())
+        with probe.stage('asr_finish'):
+            publish(recognizer.finish())
         phase = 'finished'
         metrics(True)
         if fault:
             raise RuntimeError(fault[0])
     except Exception as exc:
         code = 1
+        probe.update(fault=fault[0] if 'fault' in locals() and fault else type(exc).__name__)
         emit({'line': '[error] 音频采集：' + str(exc)})
     finally:
         stop.set()
@@ -228,7 +269,9 @@ def main():
                 emit({'line': '[error] ' + str(exc)})
         if recognizer:
             recognizer.close()
+        probe.update(exit_code=code)
         emit({'exit': code, 'cancelled': code == 0})
+        probe.close()
     return code
 
 

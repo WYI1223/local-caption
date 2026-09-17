@@ -10,6 +10,7 @@ REPORT = BASE / 'diagnostics/render-stress.json'
 
 
 def run_child():
+    REPORT.parent.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(BASE / 'app'))
     from floating_asr import main
     def driver(app):
