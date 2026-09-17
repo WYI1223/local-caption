@@ -15,7 +15,10 @@ def main():
     parser.add_argument('--backend', choices=['hymt', 'nllb', 'both'], default='hymt')
     parser.add_argument('--from-existing', type=Path, help='Reuse verified assets from a previous installation; no transcripts copied')
     parser.add_argument('--hf-endpoint', help='Optional HTTPS Hugging Face mirror chosen by the user')
+    parser.add_argument('--experimental-denoise', action='store_true', help='Install optional Windows GTCRN 25/50 percent experimental denoising')
     args = parser.parse_args()
+    if args.experimental_denoise and os.name != 'nt':
+        parser.error('Experimental denoising is currently integrated on Windows only.')
     supported = (os.name == 'nt' and platform.machine().lower() in ('amd64', 'x86_64')) or (sys.platform == 'darwin' and platform.machine() == 'arm64')
     if not supported or sys.maxsize < 2**32:
         parser.error('Requires Windows x64 or macOS Apple Silicon with native arm64 Python.')
@@ -31,7 +34,11 @@ def main():
         # Standalone macOS Python needs its original path to find libpython.
         venv.EnvBuilder(with_pip=True, symlinks=os.name != 'nt').create(env)
     subprocess.run([str(python), '-m', 'pip', 'install', '-r', str(BASE / 'requirements.txt')], check=True)
+    if args.experimental_denoise:
+        subprocess.run([str(python), '-m', 'pip', 'install', '-r', str(BASE / 'requirements-enhancement.txt')], check=True)
     groups = {'core', 'hymt', 'nllb'} if args.backend == 'both' else {'core', args.backend}
+    if args.experimental_denoise:
+        groups.add('enhancement')
     for item in platform_manifest():
         if item['group'] in groups:
             install(item, args.from_existing, args.hf_endpoint)

@@ -1,5 +1,6 @@
 """Local desktop UI and isolated Windows-console worker for NeMo Speech."""
 import ctypes
+import importlib.util
 import datetime as dt
 import json
 import os
@@ -22,6 +23,13 @@ SAVES = BASE / 'transcripts'
 PREFERENCES = BASE / 'preferences.json'
 BACKENDS = {'nllb': 'NLLB 600M INT8', 'hymt': 'Hy-MT2 1.8B Q4'}
 INPUTS = {'live': '麦克风', **({'system': '系统声音'} if WINDOWS else {})}
+FILTERS = {'raw':'原版（不降噪）','gtcrn25':'25% GTCRN＋75% 原音','gtcrn50':'50% GTCRN＋50% 原音'}
+FILTER_PYTHON = PYTHON
+
+
+def enhancement_available():
+    return (WINDOWS and (BASE / 'models/enhancement/gtcrn_simple.onnx').is_file()
+            and all(importlib.util.find_spec(name) is not None for name in ('sherpa_onnx', 'scipy')))
 
 
 def available_backends():
@@ -95,7 +103,7 @@ def main(test_driver=None):
     class App:
         def __init__(self):
             self.root = tk.Tk()
-            self.root.title('Local Caption · 本地字幕')
+            self.root.title('Local Caption · 本地字幕' + (' · 降噪试用' if WINDOWS else ''))
             scale = self.root.winfo_fpixels('1i') / 96
             self.root.geometry(f'{int(420*scale)}x{int(240*scale)}+80+80')
             self.root.minsize(int(340*scale), int(180*scale))
@@ -134,8 +142,14 @@ def main(test_driver=None):
             source = os.environ.get('ASR_AUDIO_SOURCE', preferences.get('audio_source', 'live'))
             self.audio_source = tk.StringVar(value=source if source in INPUTS else 'live')
             self.active_source = self.audio_source.get()
+            self.enhance = tk.BooleanVar(value=False)
+            selected_filter=preferences.get('audio_filter','raw')
+            self.audio_filter=tk.StringVar(value=selected_filter if selected_filter in FILTERS and (selected_filter == 'raw' or enhancement_available()) else 'raw')
+            self.active_filter='raw'
+            self.active_enhancement = False
             self.save_audio = tk.BooleanVar(value=bool(preferences.get('save_audio', False)) and WINDOWS)
             self.audio_recording = {}
+            self.comparison_proc = None
             self.audio_metrics = {}
             self.capture_device = ''
             self.metrics_file = None
@@ -187,6 +201,14 @@ def main(test_driver=None):
             for key, label in INPUTS.items():
                 self.settings.add_radiobutton(label='输入：' + label, variable=self.audio_source,
                     value=key, command=self.change_audio_source)
+            self.filter_menu=self.settings
+            self.filter_indices=[]
+            for key,label in FILTERS.items():
+                self.filter_indices.append(self.settings.index('end')+1)
+                self.filter_menu.add_radiobutton(label=('降噪：' if key=='raw' else '实验性降噪：')+label+('（下次开始生效）' if key=='raw' or enhancement_available() else '（未安装／不支持）'),variable=self.audio_filter,value=key,
+                    state='normal' if key=='raw' or enhancement_available() else 'disabled',command=self.change_audio_filter)
+            self.settings.add_command(label='实验性降噪说明与反馈', command=lambda: messagebox.showinfo(
+                '实验性降噪', '25% / 50% 为 GTCRN 与原音混合，不加动态增益。降噪可能改善或损伤识别，默认使用原版。\n\n仅支持 Windows 16/48 kHz 输入，下次开始生效。\n安装：setup.cmd --experimental-denoise\n\n反馈：GitHub Issues 选择 Experimental denoising feedback 模板。请提供模式、设备和具体错句；无需上传整堂课录音。', parent=self.root))
             for key, label in BACKENDS.items():
                 self.settings.add_radiobutton(label='翻译：' + label + ('' if key in available else '（未安装）'), variable=self.backend,
                     value=key, command=self.change_backend, state='normal' if key in available else 'disabled')
@@ -278,6 +300,10 @@ def main(test_driver=None):
                          f" · 待译 {pending['pending_words']} 词 / 最早 {pending['oldest_pending_seconds']:.1f}s"
                          + (' · 采集已停止' if not self.proc or self.audio_metrics.get('stopped') else
                             ' · 无声' if self.audio_metrics.get('level', 0) < 0.001 else ' · 有声音'))
+                enhancement = self.audio_metrics.get('enhancement')
+                if enhancement:
+                    hint += (f" · GTCRN {enhancement['mix_percent']}%" if 'mix_percent' in enhancement
+                             else f" · 增强 {enhancement['gain_db']:+.1f}dB")
             self.draw_subtitle(self.view, '\n\n'.join(rows), hint)
 
         def refresh_hints(self, *_):
@@ -342,6 +368,11 @@ def main(test_driver=None):
             self.active_source = mode
             self.audio_recording = {}
             archive_audio = WINDOWS and self.save_audio.get() and mode in ('live', 'system')
+            self.active_filter=self.audio_filter.get() if WINDOWS and mode in ('live','system') else 'raw'
+            if self.active_filter!='raw' and not enhancement_available():
+                messagebox.showerror('实验性降噪未安装','请运行 setup.cmd --experimental-denoise 安装后重启，或选择原版。',parent=self.root)
+                return
+            self.active_enhancement = self.active_filter!='raw'
             self.audio_metrics = {}
             self.capture_device = ''
             self.stopped_at = None
@@ -357,7 +388,7 @@ def main(test_driver=None):
             self.render_chinese()
             self.dirty = False
             self.session_file = SAVES / (dt.datetime.now().strftime('%Y-%m-%d_%H-%M-%S_%f') + '.txt')
-            self.metrics_file = self.session_file.with_suffix('.metrics.jsonl') if mode == 'system' or archive_audio else None
+            self.metrics_file = self.session_file.with_suffix('.metrics.jsonl') if mode == 'system' or self.active_enhancement or archive_audio else None
             self.save_status.set('新会话 · 有识别文字后自动保存中英文本')
             self.render()
             self.status.set('正在转写示例音频…' if mode == 'demo' else '正在加载 · ' + INPUTS[mode])
@@ -367,9 +398,12 @@ def main(test_driver=None):
             python = Path(sys.executable).with_name('python.exe') if WINDOWS else Path(sys.executable)
             command = [str(python), str(Path(__file__).resolve()), '--worker', mode]
             options = process_options(console=True)
-            if mode == 'system' or archive_audio:
+            if mode == 'system' or self.active_enhancement or archive_audio:
                 command = [str(PYTHON), str(BASE / 'app/loopback_worker.py'), '--source',
                            'system' if mode == 'system' else 'microphone']
+                if self.active_enhancement:
+                    command[0]=str(FILTER_PYTHON)
+                    command += ['--gtcrn-mix',self.active_filter.removeprefix('gtcrn')]
                 if archive_audio:
                     command += ['--record-audio', str(self.session_file.with_suffix('.wav'))]
                 options = process_options()
@@ -600,6 +634,7 @@ def main(test_driver=None):
             body += '\n\n输入：' + INPUTS.get(self.active_source, '示例音频')
             if self.capture_device:
                 body += ' · ' + self.capture_device
+            body += '\n音频处理：' + FILTERS[self.active_filter]
             if self.audio_recording:
                 body += '\n原始音频：' + self.audio_recording['path']
                 body += '（已保存）' if self.audio_recording.get('complete') else '（写入中或未正常收尾）'
@@ -634,7 +669,8 @@ def main(test_driver=None):
             try:
                 temporary = PREFERENCES.with_suffix('.tmp')
                 temporary.write_text(json.dumps({'translation_backend': self.active_backend,
-                    'audio_source': self.audio_source.get(), 'save_audio': self.save_audio.get()}), encoding='utf-8')
+                    'audio_source': self.audio_source.get(), 'classroom_enhancement': False,
+                    'audio_filter': self.audio_filter.get(), 'save_audio': self.save_audio.get()}), encoding='utf-8')
                 temporary.replace(PREFERENCES)
             except OSError:
                 self.status.set('设置已应用，但未能保存默认设置')
@@ -645,6 +681,24 @@ def main(test_driver=None):
                 self.status.set('当前采集保持不变 · 下次开始使用' + INPUTS[self.audio_source.get()])
             else:
                 self.status.set('下次开始使用' + INPUTS[self.audio_source.get()] + ' · 仅英语')
+
+        def change_enhancement(self):
+            self.save_preferences()
+            self.status.set('课堂增强' + ('已选中' if self.enhance.get() else '已关闭') + ' · 下次开始生效')
+
+        def change_audio_filter(self):
+            self.save_preferences()
+            self.status.set(FILTERS[self.audio_filter.get()]+' · 下次开始生效')
+
+        def compare_audio(self):
+            if self.comparison_proc and self.comparison_proc.poll() is None:
+                self.status.set('A/B 对比窗口已打开')
+                return
+            try:
+                self.comparison_proc = subprocess.Popen([str(PYTHON), str(BASE / 'app/audio_compare.py'),
+                    '--source', 'system' if self.audio_source.get() == 'system' else 'microphone'], **process_options())
+            except OSError as exc:
+                self.status.set('无法启动 A/B 对比：' + str(exc))
 
         def toggle_translation(self):
             self.translation_error = ''

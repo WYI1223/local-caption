@@ -10,6 +10,22 @@ BASE = Path(__file__).resolve().parents[1]
 PYTHON = BASE / ('translation/.venv/Scripts/python.exe' if WINDOWS else 'translation/.venv/bin/python')
 
 
+def available_commit_gib():
+    """Windows available system commit, not free physical RAM."""
+    if not WINDOWS:
+        return None
+    import ctypes
+    class Memory(ctypes.Structure):
+        _fields_ = [('length', ctypes.c_uint32), ('load', ctypes.c_uint32)] + [
+            (key, ctypes.c_uint64) for key in ('total_phys', 'available_phys', 'total_pagefile',
+                'available_pagefile', 'total_virtual', 'available_virtual', 'available_extended')]
+    value = Memory()
+    value.length = ctypes.sizeof(value)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(value)):
+        raise ctypes.WinError()
+    return value.available_pagefile / 2**30
+
+
 def process_options(console=False):
     if not WINDOWS:
         return {'start_new_session': True}

@@ -14,3 +14,7 @@
 Python 依赖见 `requirements.txt` 及安装后的各包许可信息。核心源码许可证见 `LICENSE`，不覆盖第三方组件。
 
 校验来源：两个引擎 ZIP 与当时发布方摘要核对；ASR GGUF 与已验证缓存一致；Hy 模型哈希与此前镜像元数据一致，不能声称独立官方认证；NLLB 和配套 tokenizer 哈希标识本地验证过的下载，没有发布者独立摘要。归档内文件摘要来自这些固定归档。哈希用于确保后续安装字节与验证版本一致，不证明模型质量。
+
+## 可选实验性降噪
+
+GTCRN 权重采用 [sherpa-onnx 官方文档指向的 ONNX 下载](https://csukuangfj.github.io/sherpa/onnx/speech-enhancement/models.html)，来自 [GTCRN 作者项目](https://github.com/Xiaobin-Rong/gtcrn)（MIT）。下载字节固定于 `assets.json` 的 SHA-256；发布资产 URL 可变，若上游替换文件，校验会失败而不会静默接受。模型约 523 KiB；源码包不包含权重。运行依赖 sherpa-onnx 1.13.8（Apache-2.0）、SciPy 1.17.1（BSD-3-Clause），详见安装包附带许可及 `requirements-enhancement.txt`。默认安装不包含这些可选依赖。
