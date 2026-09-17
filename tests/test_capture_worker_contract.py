@@ -45,7 +45,11 @@ if __name__=='__main__':
             with tempfile.TemporaryDirectory() as d:
                 p=subprocess.Popen([sys.executable,__file__,'--child',str(count),d],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                 # Keep stdin open, as the actual GUI does; closing stdin requests stop.
-                p.wait(timeout=20)
+                try:
+                    p.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    p.kill();p.communicate()
+                    raise
                 stdout=p.stdout.read();stderr=p.stderr.read();p.stdin.close()
                 assert p.returncode==(0 if count==3 else 1),(p.returncode,stderr)
                 events=[json.loads(l) for l in stdout.splitlines()]

@@ -104,6 +104,7 @@ class CaptureDiagnostics:
             process = None
         while True:
             row = self.snapshot()
+            row['resources_available'] = process is not None
             if process is not None:
                 try:
                     mem = process.memory_info()

@@ -300,6 +300,8 @@ def main(test_driver=None):
                          f" · 待译 {pending['pending_words']} 词 / 最早 {pending['oldest_pending_seconds']:.1f}s"
                          + (' · 采集已停止' if not self.proc or self.audio_metrics.get('stopped') else
                             ' · 无声' if self.audio_metrics.get('level', 0) < 0.001 else ' · 有声音'))
+                if self.audio_metrics.get('diagnostic_error'):
+                    hint += ' · 诊断日志写入失败'
                 enhancement = self.audio_metrics.get('enhancement')
                 if enhancement:
                     hint += (f" · GTCRN {enhancement['mix_percent']}%" if 'mix_percent' in enhancement

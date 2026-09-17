@@ -77,3 +77,6 @@ PR #1 合并复核：在保存修复 3906063 上整合 macOS 安装补丁 9b580b
 区分方法：queue 增长且 asr_push/results 长时间活动，进一步用进程 CPU 与系统 CPU/内存判断计算或资源压力；stdout 长时间活动而独立心跳持续提示消费者背压；queue 为零但 result_lag 很大是结果发出滞后，不能误判采集堵塞。若连心跳也中断，仍需调查进程调度、GIL/native 持锁或磁盘阻塞，不能凭缺日志指定根因。
 
 验证入口：run_ci.py unit/gui/frontend。新增队列溢出及无结果时空队列测试、独立心跳与轮换测试；test_capture_worker_contract.py 通过真实 worker 参数入口、callback、队列、JSONL 及 WAV 文件路径验证正常收尾及溢出退出，音频设备和 ASR 为受控替身，不冒充硬件或真实识别复现。真实 GTCRN 16/48 kHz 空输入／任意分块／flush 用小型 ONNX 模型验证，不播放音频。Tk 5000 次字幕事件响应回归接入 CI；纯逻辑双系统运行；测试清单漏项立即失败。旧 CI 只覆盖 22 项单测和保存回归，未覆盖渲染压力、真实降噪或队列溢出。
+
+
+GitHub PR #3 首次云端验收：Windows/Linux 逻辑、Windows Tk 与受控 worker、真实 GTCRN 前端及 Required CI 汇总均通过（run 35242858607）。本地新增未分类测试的反向探针被 run_ci.py 正确拒绝，随后移除。main 已启用分支保护：要求 PR、分支跟上 main、GitHub Actions 的 Required CI 成功；管理员同样受约束，不额外要求第二位审批人。禁止把未运行的硬件测试归为 CI 通过。此配置由 GitHub API 读取确认，不依靠 README 宣称。
