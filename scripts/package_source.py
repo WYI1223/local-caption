@@ -12,7 +12,7 @@ def source_files():
     for folder in ('app', 'translation', 'tests', 'scripts'):
         paths.extend(sorted((BASE / folder).glob('*.py')))
     paths.extend(sorted((BASE / 'docs').glob('*.md')))
-    paths.append(BASE / 'docs/performance-data.json')
+    paths.extend(BASE / name for name in ('docs/performance-data.json', 'docs/probability-glossary.json'))
     paths.extend(sorted((BASE / '.github/workflows').glob('*.yml')))
     paths.extend(sorted((BASE / '.github/ISSUE_TEMPLATE').glob('*.md')))
     paths.extend(sorted((BASE / '.github').glob('*.md')))
