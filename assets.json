@@ -362,5 +362,15 @@
       "llama-b11005/libggml-cpu.0.dylib": "libggml-cpu.0.24.0.dylib"
     },
     "platform": "macos"
+  },
+  {
+    "name": "gtcrn-simple",
+    "group": "enhancement",
+    "platform": "windows",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models/gtcrn_simple.onnx",
+    "sha256": "e77603ac0c23dac3227dd2d7135b3a585cbee2679048aecfa886657d3ae1b534",
+    "source": "models/enhancement/gtcrn_simple.onnx",
+    "target": "models/enhancement/gtcrn_simple.onnx",
+    "archive": false
   }
 ]

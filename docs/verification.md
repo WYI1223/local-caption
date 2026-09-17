@@ -12,6 +12,8 @@ macOS：从 GitHub b11005 / v0.1.0 下载 arm64 归档，SHA-256 与 release dig
 
 ## 可复用经验
 
+- 保存修复推送后做识别/降噪消融：固定同段 PCM 分别比较流式上下文、离线、响度、高通及 FFT 降噪。所测 FFT 参数在模糊讲话上使输出明显缩短，单独降噪也复现，暂不默认开启；词更多不等于更准。`ffprobe` 容器时长与截取后实际采样长度曾不一致，实验按采样数记录音频时长，不直接将播放器请求时长或截取参数用于实时率计算。详见 [首轮增强实验](asr-enhancement-experiment.md)，仅本地实验，未随保存修复发布。
+
 - 2026-09-16 用户要求分阶段处理：当前只修字幕保存并增加可选 WAV 留存，增强算法和识别质量保持待验证。Windows AudioArchive 在采集回调把原始设备 float32 字节送入独立有界磁盘队列，落盘 PCM16，位于增强和 downmix 前；不能放到耗时 ASR 消费之后才写，避免识别变慢时只保存已识别部分。正常停止更新 WAV 头并重命名，写入中保留 partial.wav，不覆盖同名既有文件。`test_audio_archive.py` 已验证声道、帧数、采样率、样值和拒绝覆盖，并加入 CI。
 - 音频保存真实验收：通过新启动的 Windows GUI 菜单关闭增强、开启保存原始音频，系统声音采集真实播放器输出的用户指定清晰录音一分钟片段，再通过 UI 停止。实际接收 57.0 秒，WAV 48 kHz 双声道 PCM16 共 2,736,000 帧，与 captured_seconds 一致；不将播放器的请求时长直接称为实际采集长度，也未验证静音间隔的墙钟对齐。partial 文件正常改名，TXT 中保存最终 WAV 路径。实时英文 160 词 / 12 条字幕，停止前稳定前缀保留；将软件保存的 WAV 直接交给实际 NeMo CLI 离线转写成功（161 词，首尾内容均在）。证据和源代码摘要保存在本机忽略目录 `diagnostics/audio-save-check/result.json`。仅验证 Windows 系统声音短测；麦克风录音保存、强制断电、磁盘耗尽和 80 分钟课堂仍未做硬件级验收。
 - 多行结果补充：C ABI 的单个 partial/final 可能含换行，GUI 正则必须用 DOTALL 接收完整结果，不能只取第一行；已加入真实 Tk 队列＋自动保存回归，并在原安装 / 新仓库重跑通过。系统声音首轮 3 分钟真实回放测试在历史累计修复后、DOTALL 补丁加载前完成（301 词 / 23 条字幕，过程快照稳定前缀保留）；最终完整补丁的真实回放由上述清晰录音验收覆盖。两个阶段不混记为同一构建。
@@ -39,3 +41,27 @@ macOS：从 GitHub b11005 / v0.1.0 下载 arm64 归档，SHA-256 与 release dig
 另一台 Windows 完整联网安装、连续 30–60 分钟播放、设备切换和断开；Apple Silicon 真机安装/权限/窗口/麦克风/退出；macOS 系统声音后端。首轮 overlapping 固定样本 A/B 见 [实验记录](overlap-experiment.md)：前文泄漏没有触发输出保护，默认仍关闭；需进一步验证源范围回写与有界重译方案。
 
 发布候选复核（保存功能单独发布）：独立 worktree 移除未发布增强/对比入口后，18 项单元测试及 Tk 自动保存回归通过；实际候选 loopback_worker 经真实播放器→系统声音→WAV 路径完成采集，退出码 0、12 秒 PCM 录音成功收尾。测试依赖的本机引擎/模型通过被忽略的目录链接复用，不进入提交。
+
+
+## Temporary Windows GTCRN menu trial (2026-09-16)
+
+Added direct menu choices for raw / 25% / 50% GTCRN, effective on next start. No dynamic gain. `app/gtcrn_mix.py` keeps online model state, a matching raw FIFO, and stateful 48-to-16 kHz FIR decimation; supports current 16/48 kHz devices and explicitly rejects unsupported rates. Stop flushes the frontend before ASR. Windows workers use the existing isolated diagnostics enhancement environment; main translation dependencies are unchanged. This is a local experimental installation, not a packaged cross-platform release.
+
+`tests/test_gtcrn_menu_live.py` drives actual Tk menu and start/stop controls, real WASAPI playback/capture and native ASR, with translation disabled and isolated test preferences/output. All three direct-menu choices transcribed the JFK sample, saved full text and raw audio, reported correct active modes, and finished with zero ASR backlog and zero GTCRN buffered samples. Mid-stream menu changes did not change the active mode. Results: `diagnostics/gtcrn-menu-e2e/result.json`. Initial cascade-menu tests were repeated after switching to direct menu entries; these repeated audible samples were noticed by the user. Tests and audio playback have ended. Avoid repeating audible workflow checks without a clear user-facing heads-up; prefer non-audio checks for presentation-only follow-ups.
+
+Additional checks: immediate startup cancellation for both neural modes; zero-input flush; 48,001-sample input processed whole vs arbitrary 777-sample chunks, same 16,001-sample output within 1e-5. Native screenshot inspection observed the intermediate settings menu; final direct-menu behavior was verified through actual Tk controls, not a mocked handler. Title/hint-only follow-ups do not change the audio path. Long-run simultaneous ASR/Hy-MT2 queue behavior remains for the user's trial.
+
+New untranscribed holdout: `diagnostics/classroom-new-35m-45m.wav`, source classroom recording at container 35:00, requested 600 seconds, decoded 599.9695625 seconds at 48 kHz mono. Metadata/SHA-256 in adjacent JSON. `diagnostics/classroom-live-trial.html` provides a non-autoplay player and switching instructions. Application title includes 降噪试用 to distinguish this build; recordings and exports identify active processing mode.
+
+
+### 2026-09-17：实验性 GTCRN 可选安装与反馈入口
+
+菜单保留原版／25%／50%，实验模式明确标注，默认原版；缺少可选资源时禁用实验模式，旧的实验偏好本次回退原版。安装入口 `setup.cmd --experimental-denoise` 将固定版 sherpa-onnx 1.13.8、SciPy 1.17.1 安装到项目主虚拟环境；模型由 assets.json 下载并校验到 models/enhancement，不再引用 diagnostics 内开发机环境。源码打包白名单包含可选依赖清单及反馈模板。没有自动反馈上传。
+
+本机 Windows / Python 3.11.16 已从 `translation/.venv/Scripts/python.exe scripts/setup.py --experimental-denoise` 完成可选依赖安装和真实网络模型下载、SHA-256 检查。doctor --verify 显示 experimental denoising ready。setup --help、修改 Python 文件编译及源码 ZIP 内容检查通过；ZIP 不含模型、录音和会话文件。
+
+实际 Tk 菜单驱动三个模式启动系统音频 worker，再正常停止，新 UI 实例重新读取菜单保存的 50% 偏好，通过；入口 diagnostics/check_experimental_delivery.py，结果 diagnostics/experimental-delivery/result.json。测试使用隔离偏好及保存目录，未重启用户窗口、未修改用户设置、未播放声音。该短测试验证新版环境路由、设备启动、停止和偏好，不能声称新版又完成十分钟字幕质量验收。另在主虚拟环境对本地 JFK 文件进行两比例真实 GTCRN 分块处理（没有播放），两路均返回 176000 个有效样本、尾部缓冲为零。此前用户十分钟三路试用为算法及真实内容对照的既有证据。
+
+受控覆盖：将可用性探测替换为不可用，真实 Tk 菜单回退原版并禁用两个实验选项，通过；这是条件分支测试，不是 macOS 真机验证。macOS 安装选项明确拒绝，原有路径不安装可选依赖。全新 Windows 机器安装及 macOS 真机仍待朋友验证。
+
+维护经验：把实验交付给他人前要清除 GUI/worker 对 diagnostics 环境及模型路径的依赖，更新安装器和源码打包白名单；“开发机可运行”不足以证明源码分享后可安装。音频 E2E 会发声的测试必须事先明确，本轮复核使用无播放入口，未重跑 test_gtcrn_menu_live.py。

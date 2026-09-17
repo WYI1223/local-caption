@@ -4,7 +4,7 @@ import zipfile
 
 BASE = Path(__file__).resolve().parents[1]
 ROOT_FILES = ['README.md', 'CONTRIBUTING.md', 'THIRD_PARTY.md', 'LICENSE', '.gitignore', '.gitattributes', 'assets.json',
-              'requirements.txt', 'requirements-benchmark.txt', 'setup.cmd', 'start.cmd', 'doctor.cmd', 'setup.command', 'start.command']
+              'requirements.txt', 'requirements-enhancement.txt', 'requirements-benchmark.txt', 'setup.cmd', 'start.cmd', 'doctor.cmd', 'setup.command', 'start.command']
 
 
 def source_files():

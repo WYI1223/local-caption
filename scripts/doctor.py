@@ -36,6 +36,15 @@ def main():
             errors.append(f'{directory} is not writable: {exc}')
     print('Local Caption | Python', platform.python_version())
     print('Backends:', ready)
+    optional = [a for a in platform_manifest() if a['group'] == 'enhancement']
+    if optional:
+        try:
+            importlib.import_module('sherpa_onnx')
+            importlib.import_module('scipy')
+            denoise_ready = all(installed(a, args.verify) for a in optional)
+        except Exception:
+            denoise_ready = False
+        print('Experimental denoising:', 'ready' if denoise_ready else 'not installed or invalid (raw mode available)')
     if errors:
         print('\n'.join('ERROR: ' + e for e in errors))
         return 1

@@ -31,6 +31,7 @@ class Options(C.Structure):
 
 class StreamRecognizer:
     def __init__(self):
+        self.owns_recognizer = True
         self.recognizer = C.c_void_p()
         self.stream = C.c_void_p()
         self.directory = os.add_dll_directory(str(BASE / 'runtime/bin'))
@@ -91,11 +92,21 @@ class StreamRecognizer:
         self.check(self.stream_finish(self.stream))
         return self.results()
 
+    def reset_stream(self):
+        """Release decoding state before starting the next clip; keep loaded weights."""
+        if self.stream:
+            self.stream_close(self.stream)
+        self.stream = C.c_void_p()
+        options = self.recognition_options_default()
+        options.interim_results = True
+        options.enable_automatic_punctuation = True
+        self.check(self.streaming_recognize(self.recognizer, C.byref(options), C.byref(self.stream)))
+
     def close(self):
         if self.stream:
             self.stream_close(self.stream)
             self.stream = C.c_void_p()
-        if self.recognizer:
+        if self.recognizer and self.owns_recognizer:
             self.destroy(self.recognizer)
             self.recognizer = C.c_void_p()
         if self.directory:

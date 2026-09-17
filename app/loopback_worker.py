@@ -1,6 +1,5 @@
 """Capture default Windows output using WASAPI; stream locally into NeMo ASR."""
 import json
-import argparse
 import ctypes
 from ctypes import wintypes
 import msvcrt
@@ -10,6 +9,7 @@ import queue
 import sys
 import threading
 import time
+import argparse
 
 BASE = Path(__file__).resolve().parents[1]
 
@@ -17,8 +17,16 @@ BASE = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', choices=['system', 'microphone'], default='system')
+    parser.add_argument('--enhance', action='store_true')
+    parser.add_argument('--gtcrn-mix', type=int, choices=[25,50])
     parser.add_argument('--record-audio', type=Path, help='Save unenhanced device audio as PCM16 WAV')
+    parser.add_argument('--compare', action='store_true', help='Capture once, then decode raw/enhanced sequentially with one model')
+    parser.add_argument('--duration', type=float, default=0, help='Automatic stop after captured seconds; zero is unlimited')
     args = parser.parse_args()
+    if args.gtcrn_mix and (args.enhance or args.compare):
+        parser.error('GTCRN mixing cannot be combined with legacy enhancement/comparison')
+    if args.compare and not args.duration:
+        args.duration = 30
     sys.stdout.reconfigure(encoding='utf-8')
     lock = threading.Lock()
     def emit(event):
@@ -61,12 +69,29 @@ def main():
         rate, channels = int(device['defaultSampleRate']), int(device['maxInputChannels'])
         if not channels:
             raise RuntimeError('默认音频设备不支持输入采集。')
-        recognizer = StreamRecognizer()
+        if args.compare:
+            from platform_support import available_commit_gib
+            available = available_commit_gib()
+            if available is not None and available < 5:
+                raise RuntimeError(f'A/B 对比需要额外识别工作区；当前可提交内存仅 {available:.1f} GiB（保守要求5 GiB）。请先停止其他字幕采集再试。')
+        else:
+            recognizer = StreamRecognizer()
+        from audio_enhancement import ClassroomEnhancer
+        enhancer = ClassroomEnhancer(rate) if args.enhance or args.compare else None
+        output_rate = rate
+        if args.gtcrn_mix:
+            from gtcrn_mix import GTCRNMix
+            enhancer = GTCRNMix(rate,args.gtcrn_mix/100)
+            output_rate = enhancer.output_rate
         blocks = queue.Queue(maxsize=120)  # 12 seconds, then stop explicitly; never silently drop.
         fault = []
         captured = 0
         peak = 0.0
         processed = 0.0
+        raw_processed = 0.0
+        enhancement_seconds = 0.0
+        comparison_audio = []
+        phase = 'capture'
         started = time.monotonic()
         def callback(data, frame_count, timing, status):
             nonlocal captured, peak
@@ -77,19 +102,27 @@ def main():
                 stop.set()
                 return (None, pa.paComplete)
             if archive:
+                recorded_data = data
+                if args.duration:
+                    recorded_data = data[:max(0, int(args.duration * rate) - captured) * channels * 4]
                 try:
-                    archive.submit(data)
+                    archive.submit(recorded_data)
                 except Exception as exc:
                     fault.append(str(exc))
                     stop.set()
                     return (None, pa.paComplete)
             samples = np.frombuffer(data, dtype=np.float32).reshape(-1, channels).mean(axis=1).astype(np.float32)
+            if args.duration:
+                samples = samples[:max(0, int(args.duration * rate) - captured)]
             peak = float(np.max(np.abs(samples))) if len(samples) else 0.0
             try:
                 blocks.put_nowait(samples)
                 captured += len(samples)
             except queue.Full:
                 fault.append('音频待识别超过 12 秒，已停止采集以避免继续积压；末尾可能不完整。')
+                stop.set()
+                return (None, pa.paComplete)
+            if args.duration and captured >= int(args.duration * rate):
                 stop.set()
                 return (None, pa.paComplete)
             return (None, pa.paContinue)
@@ -106,6 +139,8 @@ def main():
         capture.start_stream()
         emit({'line': '[live] listening ' + args.source})
         emit({'capture_device': device['name']})
+        emit({'enhancement': {'enabled': bool(enhancer), 'comparison': args.compare,
+                             'gtcrn_mix': args.gtcrn_mix}})
         last_metrics = 0
         previous = ''
         def publish(results):
@@ -122,8 +157,10 @@ def main():
             now = time.monotonic()
             if force or now - last_metrics >= 0.5:
                 emit({'audio_metrics': dict(elapsed=now - started, captured_seconds=captured / rate,
-                    processed_seconds=processed, backlog_seconds=max(0, captured / rate - processed),
-                    queued_blocks=blocks.qsize(), level=peak, stopped=stop.is_set())})
+                    processed_seconds=processed, backlog_seconds=max(0, captured / rate - min(processed, raw_processed) if args.compare else captured / rate - processed),
+                    queued_blocks=blocks.qsize(), level=peak, stopped=stop.is_set(),
+                    enhancement=enhancer.metrics() if enhancer else None, enhancement_seconds=enhancement_seconds,
+                    phase=phase)})
                 last_metrics = now
         while not stop.is_set() or not blocks.empty():
             try:
@@ -133,11 +170,42 @@ def main():
                     raise RuntimeError('系统声音设备已停止或断开，请重新选择默认播放设备后重试。')
                 metrics()
                 continue
-            recognizer.push(samples, rate)
-            publish(recognizer.results())
+            before = time.perf_counter()
+            enhanced = enhancer.process(samples) if enhancer else samples
+            enhancement_seconds += time.perf_counter() - before
+            if args.compare:
+                comparison_audio.append((samples, enhanced))
+            else:
+                if len(enhanced):recognizer.push(enhanced, output_rate)
+                publish(recognizer.results())
             metrics()
         capture.stop_stream()
+        if args.gtcrn_mix:
+            tail=enhancer.finish()
+            if len(tail):recognizer.push(tail,output_rate)
+            publish(recognizer.results())
+        if args.compare:
+            phase = 'raw'
+            metrics(True)
+            # One model and one decoder state at a time; no extra translation model.
+            recognizer = StreamRecognizer()
+            for samples, enhanced in comparison_audio:
+                recognizer.push(samples, rate)
+                for result in recognizer.results():
+                    raw_processed = max(raw_processed, result['processed'])
+                    emit({'comparison_raw': result['text']})
+                metrics()
+            for result in recognizer.finish():
+                raw_processed = max(raw_processed, result['processed'])
+                emit({'comparison_raw': result['text']})
+            recognizer.reset_stream()
+            phase = 'enhanced'
+            for samples, enhanced in comparison_audio:
+                recognizer.push(enhanced, rate)
+                publish(recognizer.results())
+                metrics()
         publish(recognizer.finish())
+        phase = 'finished'
         metrics(True)
         if fault:
             raise RuntimeError(fault[0])
