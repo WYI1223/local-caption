@@ -1,17 +1,87 @@
-name: Logic tests
-on: [push, pull_request]
+name: Caption CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: caption-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  tests:
-    runs-on: windows-latest
+  unit:
+    name: Logic and queue (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m unittest discover -s tests -p test_translation_flow.py
-      - run: python -m unittest discover -s tests -p test_transcript_history.py
-      - run: python tests/test_transcript_persistence.py
-      - run: python -m unittest discover -s tests -p test_distribution.py
-      - run: python -m pip install numpy==2.4.6
-      - run: python -m unittest discover -s tests -p test_audio_archive.py
-      - run: python -m unittest discover -s tests -p test_audio_enhancement.py
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install numpy==2.4.6 psutil==7.2.2
+      - run: python -m compileall -q app scripts tests
+      - run: python scripts/run_ci.py unit
+      - run: python scripts/package_source.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-${{ matrix.os }}
+          path: diagnostics/ci/*-results.json
+          retention-days: 7
+  gui:
+    name: Windows Tk persistence and responsiveness
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install numpy==2.4.6 psutil==7.2.2
+      - run: python scripts/run_ci.py gui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-results
+          path: diagnostics/ci/*-results.json
+          retention-days: 7
+  frontend:
+    name: Real GTCRN streaming frontend
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-enhancement.txt
+      - run: python -m pip install numpy==2.4.6 -r requirements-enhancement.txt
+      - name: Download and verify small pinned enhancement model
+        run: python -c "import sys; sys.path.insert(0, 'scripts'); from assets import platform_manifest, install; [install(a) for a in platform_manifest() if a['group'] == 'enhancement']"
+      - run: python scripts/run_ci.py frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-results
+          path: diagnostics/ci/*-results.json
+          retention-days: 7
+  required:
+    name: Required CI
+    if: always()
+    needs: [unit, gui, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All coverage groups must pass
+        env:
+          UNIT_RESULT: ${{ needs.unit.result }}
+          GUI_RESULT: ${{ needs.gui.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: test "$UNIT_RESULT" = success && test "$GUI_RESULT" = success && test "$FRONTEND_RESULT" = success

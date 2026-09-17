@@ -3,3 +3,4 @@ numpy==2.4.6
 sentencepiece==0.2.2
 PyAudioWPatch==0.2.12.8; sys_platform == 'win32'
 PyYAML==6.0.3
+psutil==7.2.2
