@@ -73,7 +73,11 @@ def main():
         import pyaudiowpatch as pa
         from asr_stream import StreamRecognizer
         audio = pa.PyAudio()
-        device = audio.get_default_wasapi_loopback() if args.source == 'system' else audio.get_default_input_device_info()
+        from audio_devices import select_device
+        device, device_route = select_device(audio, pa, args.source)
+        host = audio.get_host_api_info_by_index(device['hostApi'])
+        probe.update(device_route=device_route, host_api=host['name'],
+                     device_index=device['index'], default_input_latency=device.get('defaultHighInputLatency'))
         rate, channels = int(device['defaultSampleRate']), int(device['maxInputChannels'])
         if not channels:
             raise RuntimeError('默认音频设备不支持输入采集。')

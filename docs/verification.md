@@ -80,3 +80,23 @@ PR #1 合并复核：在保存修复 3906063 上整合 macOS 安装补丁 9b580b
 
 
 GitHub PR #3 首次云端验收：Windows/Linux 逻辑、Windows Tk 与受控 worker、真实 GTCRN 前端及 Required CI 汇总均通过（run 35242858607）。本地新增未分类测试的反向探针被 run_ci.py 正确拒绝，随后移除。main 已启用分支保护：要求 PR、分支跟上 main、GitHub Actions 的 Required CI 成功；管理员同样受约束，不额外要求第二位审批人。禁止把未运行的硬件测试归为 CI 通过。此配置由 GitHub API 读取确认，不依靠 README 宣称。
+
+
+### 2026-09-17 晚间输入设备溢出（与 12 秒队列溢出区分）
+
+18:22 与 18:23 两次会话的新 capture 探针均记录 callback_status=2（本机 PyAudioWPatch 常量 paInputOverflow），应用 queue overflow_count=0，queue_high_seconds=1.2；实际采集分别为 10.3 / 62.1 秒。此处为上游输入流已丢弃数据的报告，不能套用上午 120 块应用队列满的结论。[PortAudio 状态定义](https://portaudio.com/docs/v19-doxydocs/portaudio_8h.html)。当前实现收到非零设备状态即停止，因此这些会话没有继续采集，但 WAV 正常收尾不表示上游丢失的声音被恢复。
+
+两次采集期间可用 RAM 最低 107.62 / 7.77 MiB；这是严重资源压力证据，但不是因果对照。stdout 最大调用耗时均约 0.016 秒，不支持长时间输出背压为此次直接原因。page_faults 是累计页错误，包含软缺页，不能当硬盘换页次数。停止后的资源快照不能替代故障当时进程归因；尤其 private commit 不能当常驻物理内存。下一步优先同输入、同模式的内存充足对照，仍需排查驱动／回调调度。未自动关闭其他进程、修改缓冲上限或忽略设备丢帧。
+
+脱敏数值摘要在 diagnostics/input-overflow-20260917-evening.json；原始探针保留在本地 transcripts。本次仅诊断与记录，没有部署行为变更。
+
+
+### 2026-09-17 旧版稳定性的回归排查：保存录音会切换采集后端
+
+用户补充旧版可能是增加原始音频保存之前。对比 960cae0 / 3906063 与当前 GUI：旧麦克风走 nemo-speech --live；原始音频保存或增强启用后走 Python loopback_worker。故不能把“同一麦克风／同一负载”当作同一采集实现，也不能只归因于内存。新增 18:31 会话在可用 RAM 最低约 916 MiB 时仍报 input overflow，未证明内存是充分或必要条件。
+
+本机只读枚举证实 get_default_input_device_info 默认是 MME，44.1 kHz／2 声道；Windows WASAPI 同一麦克风端点为 48 kHz／4 声道。候选修正通过 WASAPI host 的 defaultInputDevice 明确选麦克风，缺少 WASAPI 时才回退并记录 route；系统声音回环入口保持一致。probe 新增 host API、device route/index、默认输入延迟，便于核对。Windows 默认 PyAudio 输入不等于 WASAPI 默认输入，是本次确认的配置差异；它是否解释实际溢出仍待同条件实测。
+
+新增设备选择两项测试及真实 worker 控制边界回归通过；只读本机枚举验证候选实际选中 WASAPI 48 kHz。检查时旧 native --live 会话正在运行，没有打断它或叠加另一 ASR 模型；因此未宣称声卡连续采集或稳定性已经验证。诊断分支保留候选，不立即合并 main。当前可用的旧路径对照是原版＋关闭原始音频保存；不能在保持保存开启时声称已经回到旧路径。新增探针锁竞争仍是待排除因素，此次只改设备选择以避免混淆对照。
+
+保存原始音频现改为每次启动显式选择，不从旧偏好恢复开启状态；手动勾选仍可用于当前应用会话。已将旧偏好为 true 的启动、真实菜单手动开启以及持久化关闭状态接入现有 Tk 保存回归（CI gui 组）。此调整不改变字幕自动保存。用户授权先推送当前候选，WASAPI 长时硬件稳定性仍待实测。

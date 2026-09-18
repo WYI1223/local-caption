@@ -147,7 +147,7 @@ def main(test_driver=None):
             self.audio_filter=tk.StringVar(value=selected_filter if selected_filter in FILTERS and (selected_filter == 'raw' or enhancement_available()) else 'raw')
             self.active_filter='raw'
             self.active_enhancement = False
-            self.save_audio = tk.BooleanVar(value=bool(preferences.get('save_audio', False)) and WINDOWS)
+            self.save_audio = tk.BooleanVar(value=False)  # Recording is opt-in on every app launch.
             self.audio_recording = {}
             self.comparison_proc = None
             self.audio_metrics = {}
@@ -676,7 +676,7 @@ def main(test_driver=None):
                 temporary = PREFERENCES.with_suffix('.tmp')
                 temporary.write_text(json.dumps({'translation_backend': self.active_backend,
                     'audio_source': self.audio_source.get(), 'classroom_enhancement': False,
-                    'audio_filter': self.audio_filter.get(), 'save_audio': self.save_audio.get()}), encoding='utf-8')
+                    'audio_filter': self.audio_filter.get(), 'save_audio': False}), encoding='utf-8')
                 temporary.replace(PREFERENCES)
             except OSError:
                 self.status.set('设置已应用，但未能保存默认设置')
