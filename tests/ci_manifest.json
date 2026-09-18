@@ -5,7 +5,8 @@
     "test_distribution.py",
     "test_audio_archive.py",
     "test_audio_enhancement.py",
-    "test_capture_diagnostics.py"
+    "test_capture_diagnostics.py",
+    "test_audio_devices.py"
   ],
   "gui": [
     "test_transcript_persistence.py",

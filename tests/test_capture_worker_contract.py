@@ -28,11 +28,14 @@ def child():
         def stop_stream(self):pass
         def close(self):pass
     class Audio:
-        def get_default_input_device_info(self):return dict(defaultSampleRate=16000,maxInputChannels=1,index=0,name='Controlled input')
+        def get_default_input_device_info(self):return dict(defaultSampleRate=16000,maxInputChannels=1,index=0,hostApi=0,name='Controlled input')
+        def get_host_api_info_by_type(self,kind):return {'defaultInputDevice':0}
+        def get_device_info_by_index(self,index):return self.get_default_input_device_info()
+        def get_host_api_info_by_index(self,index):return {'name':'Controlled WASAPI'}
         def open(self,**kw):return Stream(kw['stream_callback'])
         def terminate(self):pass
     sys.modules['asr_stream']=types.SimpleNamespace(StreamRecognizer=Recognizer)
-    sys.modules['pyaudiowpatch']=types.SimpleNamespace(PyAudio=Audio,paFloat32=1,paContinue=0,paComplete=1)
+    sys.modules['pyaudiowpatch']=types.SimpleNamespace(PyAudio=Audio,paWASAPI=13,paFloat32=1,paContinue=0,paComplete=1)
     import loopback_worker
     sys.argv=['loopback_worker','--source','microphone','--duration',str(count/10),
               '--record-audio',str(out/'audio.wav'),'--diagnostics',str(out/'capture.jsonl')]

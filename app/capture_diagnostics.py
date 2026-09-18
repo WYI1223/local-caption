@@ -137,6 +137,6 @@ class CaptureDiagnostics:
 def source_fingerprint():
     root = Path(__file__).parent
     digest = hashlib.sha256()
-    for name in ('loopback_worker.py', 'asr_stream.py', 'gtcrn_mix.py', 'capture_diagnostics.py'):
+    for name in ('loopback_worker.py', 'asr_stream.py', 'gtcrn_mix.py', 'capture_diagnostics.py', 'audio_devices.py'):
         digest.update((root/name).read_bytes())
     return digest.hexdigest()[:16]

@@ -14,10 +14,22 @@ def child(output):
     import floating_asr
     temporary = tempfile.TemporaryDirectory(prefix='caption-persistence-')
     floating_asr.SAVES = Path(temporary.name)
+    floating_asr.PREFERENCES = Path(temporary.name) / 'preferences.json'
+    floating_asr.PREFERENCES.write_text(json.dumps({'save_audio': True}), encoding='utf-8')
     outcome = {'checks': [], 'errors': []}
 
     def driver(app):
         app.root.withdraw()
+        assert not app.save_audio.get(), 'Old preferences must not auto-enable recording'
+        for i in range(app.settings.index('end') + 1):
+            if app.settings.type(i) != 'separator' and app.settings.entrycget(i, 'label') == '保存原始音频（下次开始生效）':
+                app.settings.invoke(i)
+                assert app.save_audio.get(), 'Manual opt-in must remain available'
+                assert json.loads(floating_asr.PREFERENCES.read_text())['save_audio'] is False
+                app.settings.invoke(i)
+                break
+        else:
+            raise AssertionError('Recording menu not found')
         app.chinese.set(False)
         app.session_file = Path(temporary.name) / 'session.txt'
         steps = [
